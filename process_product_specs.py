@@ -1,4 +1,5 @@
-from fastapi import FastAPI, HTTPException
+# process_product_specs.py
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 import requests
 from bs4 import BeautifulSoup
@@ -13,12 +14,10 @@ from botocore.exceptions import ClientError
 from io import BytesIO
 from typing import Dict
 
-app = FastAPI()
+router = APIRouter(prefix="/process-product", tags=["product-specs"])
 
-# Configuration
 GEMINI_API_KEY = "AIzaSyAhaac6yPECRFwRmpifQattFvK__8YCyaY"
 genai.configure(api_key=GEMINI_API_KEY)
-
 ACCESS_KEY = "AKIAWOAVSU6U72T77FUR"
 SECRET_KEY = "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"
 BUCKET_NAME = "belden-demo-bucket"
@@ -30,11 +29,9 @@ s3_client = boto3.client(
     aws_secret_access_key=SECRET_KEY
 )
 
-# Pydantic model for input validation
 class ProductInput(BaseModel):
     product_name: str
 
-# Existing functions (kept as is)
 def fetch_webpage(url):
     try:
         response = requests.get(url, timeout=TIMEOUT_THRESHOLD)
@@ -47,13 +44,10 @@ def extract_specs_with_gemini(html_content):
     model = genai.GenerativeModel('gemini-1.5-pro')
     soup = BeautifulSoup(html_content, 'html.parser')
     text_content = soup.get_text(separator='\n', strip=True)
-
     prompt = f"""Extract the product specifications from the following text:\n\n{text_content}\n\nReturn the specifications as a JSON object."""
-    
     try:
         response = model.generate_content(prompt)
-        response_text = response.text.strip('```json').strip().strip('```').strip()
-        return json.loads(response_text)
+        return json.loads(response.text.strip('```json').strip().strip('```').strip())
     except Exception:
         return None
 
@@ -61,11 +55,9 @@ def create_pdf(specs, output_filename):
     pdf = FPDF()
     pdf.add_page()
     pdf.set_font("Arial", size=12)
-
     for key, value in specs.items():
         text_line = f"{key}: {value}"
         pdf.cell(200, 10, txt=text_line.encode('latin-1', 'replace').decode('latin-1'), ln=1)
-
     temp_path = f"temp_{output_filename}.pdf"
     pdf.output(temp_path)
     return temp_path
@@ -100,73 +92,49 @@ def scrape_product_specs(url, product_name, output_filename):
         success = upload_to_s3(pdf_file, product_name, sanitize_filename(output_filename))
         os.remove(pdf_file)
         return success
-
     html_content = fetch_webpage(url)
     if not html_content:
         return False
-
     specs = extract_specs_with_gemini(html_content)
     if not specs:
         return False
-
     temp_pdf_path = create_pdf(specs, output_filename)
     success = upload_to_s3(temp_pdf_path, product_name, sanitize_filename(output_filename))
-    
     if os.path.exists(temp_pdf_path):
         os.remove(temp_pdf_path)
-    
     return success
 
 def read_csv_from_s3(bucket_name, s3_key):
     try:
         response = s3_client.get_object(Bucket=bucket_name, Key=s3_key)
         csv_content = response['Body'].read()
-        df = pd.read_csv(BytesIO(csv_content))
-        return df
-    except (ClientError, Exception):
+        return pd.read_csv(BytesIO(csv_content))
+    except ClientError:
         return None
 
-# API endpoints
-@app.post("/process-product/", response_model=Dict[str, bool])
+@router.post("", response_model=Dict[str, bool])
 async def process_product(product_input: ProductInput):
     s3_csv_key = "Distributor URL/Demo Distributor URLs.csv"
+    product_name = product_input.product_name.strip()
+    if not product_name:
+        raise HTTPException(status_code=400, detail="Product name cannot be empty")
     
-    try:
-        product_name = product_input.product_name.strip()
-        if not product_name:
-            raise HTTPException(status_code=400, detail="Product name cannot be empty")
+    df = read_csv_from_s3(BUCKET_NAME, s3_csv_key)
+    if df is None:
+        raise HTTPException(status_code=500, detail="Failed to read CSV from S3")
 
-        df = read_csv_from_s3(BUCKET_NAME, s3_csv_key)
-        if df is None:
-            raise HTTPException(status_code=500, detail="Failed to read CSV from S3")
+    product_row = df[df["Product Name"].str.strip() == product_name]
+    if product_row.empty:
+        raise HTTPException(status_code=404, detail="Product not found in CSV")
 
-        product_row = df[df["Product Name"].str.strip() == product_name]
-        
-        if product_row.empty:
-            raise HTTPException(status_code=404, detail="Product not found in CSV")
+    row = product_row.iloc[0]
+    url_columns = ["Distributor URL 1", "Distributor URL 2", "Distributor URL 3", "Distributor URL 4"]
+    
+    for i, url_col in enumerate(url_columns, 1):
+        url = row[url_col]
+        if pd.notna(url):
+            output_filename = f"{product_name} {i}"
+            if not scrape_product_specs(url, product_name, output_filename):
+                raise HTTPException(status_code=500, detail=f"Failed to process URL {url}")
 
-        row = product_row.iloc[0]
-        url_columns = ["Distributor URL 1", "Distributor URL 2", 
-                      "Distributor URL 3", "Distributor URL 4"]
-        
-        for i, url_col in enumerate(url_columns, 1):
-            url = row[url_col]
-            if pd.notna(url):
-                output_filename = f"{product_name} {i}"
-                if not scrape_product_specs(url, product_name, output_filename):
-                    raise HTTPException(status_code=500, detail=f"Failed to process URL {url}")
-
-        return {"response": True}
-
-    except HTTPException as e:
-        raise e
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"An error occurred: {str(e)}")
-
-@app.get("/health")
-async def health_check():
-    return {"status": "healthy"}
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    return {"response": True}
