@@ -42,7 +42,7 @@ async def map_distributor():
     """
     try:
         distributor_df = read_csv_from_s3(BUCKET_NAME, "Distributor URL/Demo Distributor URLs.csv")
-        product_df = read_csv_from_s3(BUCKET_NAME, "Product Sheet/Product_sheet_updated.csv")
+        product_df = read_csv_from_s3(BUCKET_NAME, "Product Sheet/Product_sheet.csv")
         
         dist_urls = {
             'Distributor 1': distributor_df['Distributor 1 URL'].iloc[0] if 'Distributor 1 URL' in distributor_df.columns else None,
@@ -54,9 +54,9 @@ async def map_distributor():
             if url and dist_name + ' URL' in product_df.columns:
                 product_df[dist_name + ' URL'] = url
         
-        write_csv_to_s3(product_df, BUCKET_NAME, "Product Sheet/Product_sheet_updated.csv")
+        write_csv_to_s3(product_df, BUCKET_NAME, "Product Sheet/Product_sheet.csv")
         
-        return {"message": "Successfully updated Product_sheet_updated.csv with distributor URLs"}
+        return {"message": "Successfully updated Product_sheet.csv with distributor URLs"}
     except HTTPException as e:
         raise e
     except Exception as e:
