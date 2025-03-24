@@ -37,6 +37,10 @@ class ProductInput(BaseModel):
     product_name: str
 
 def get_first_search_result(part_number):
+    # Hardcode URL for specific part number
+    if part_number == "0911 ANC 410":
+        return "https://complete-electronics.com/media/catalog/product/attachment/images/15934.pdf"
+    
     try:
         search_query = f"Lumberg Automation {part_number} pdf filetype:pdf"
         results = search(search_query, num_results=1, lang="en", advanced=False)
