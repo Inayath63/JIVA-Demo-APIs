@@ -7,6 +7,7 @@ from get_datasheet import router as datasheet_router
 from get_bucket_details import router as bucket_details_router
 from process_product_specs import router as specs_router
 from get_prod_details import router as prod_details_router
+from reset_product_sheet import router as reset_router  # New import
 
 app = FastAPI(
     title="JIVA Demo APIs",
@@ -21,6 +22,7 @@ app.include_router(datasheet_router)
 app.include_router(bucket_details_router)
 app.include_router(specs_router)
 app.include_router(prod_details_router)
+app.include_router(reset_router)  # Add the new router
 
 @app.get("/health")
 async def health_check():
