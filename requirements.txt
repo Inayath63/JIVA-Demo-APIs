@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+pydantic
+pandas
+googlesearch-python
+requests
+boto3
+beautifulsoup4
+fpdf
+google-generativeai
+numpy
