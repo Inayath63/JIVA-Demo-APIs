@@ -1,10 +1,10 @@
-from fastapi import FastAPI, HTTPException
+# get_product_file_path.py
+from fastapi import APIRouter, HTTPException
 import boto3
 import json
 
-app = FastAPI()
+router = APIRouter(prefix="/get-product-file-path", tags=["file-path"])
 
-# Configuration
 AWS_ACCESS_KEY = "AKIAWOAVSU6U72T77FUR"
 AWS_SECRET_KEY = "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"
 BUCKET_NAME = "belden-demo-bucket"
@@ -27,24 +27,12 @@ def get_csv_path(bucket_name, file_key):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Unexpected error: {str(e)}")
 
-# API endpoint
-@app.get("/get-product-file-path")
+@router.get("")
 async def get_product_file_path():
-    """
-    Retrieve the S3 path of the product CSV file.
-    """
+    """Retrieve the S3 path of the product CSV file."""
     file_key = "Product Sheet/Product_sheet.csv"
     try:
         result = get_csv_path(BUCKET_NAME, file_key)
         return result
     except HTTPException as e:
         raise e
-
-@app.get("/health")
-async def health_check():
-    """Health check endpoint."""
-    return {"status": "healthy"}
-
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
