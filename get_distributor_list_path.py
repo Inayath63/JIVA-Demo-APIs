@@ -29,7 +29,7 @@ def get_csv_path(bucket_name, file_key):
 
 @router.get("")
 async def get_product_file_path():
-    """Retrieve the S3 path of the product CSV file."""
+    """Retrieve the S3 path of the distributor CSV file."""
     file_key = "Distributor List/distributor-list.csv"
     try:
         result = get_csv_path(BUCKET_NAME, file_key)
