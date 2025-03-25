@@ -73,9 +73,9 @@ async def map_distributor():
         merged_df = merged_df.drop(columns=[col for col in merged_df.columns if col.endswith('_new')])
 
         # Write back to S3 (using Product_sheet_test.csv as in your working version)
-        write_csv_to_s3(merged_df, BUCKET_NAME, "Product Sheet/Product_sheet_test.csv")
+        write_csv_to_s3(merged_df, BUCKET_NAME, "Product Sheet/Product_sheet.csv")
         
-        return {"message": "Successfully updated Product_sheet_test.csv with distributor URLs"}
+        return {"message": "Successfully updated Product_sheet.csv with distributor URLs"}
     except HTTPException as e:
         raise e
     except Exception as e:
