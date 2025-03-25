@@ -4,6 +4,9 @@ import pandas as pd
 from io import StringIO
 from pydantic import BaseModel
 from urllib.parse import urlparse
+import google.generativeai as genai
+import json
+import numpy as np
 
 router = APIRouter(prefix="/map-distributor", tags=["map-distributor"])
 
@@ -17,14 +20,20 @@ s3 = boto3.client(
     aws_secret_access_key=AWS_SECRET_KEY
 )
 
+# Configure Google Generative AI
+genai.configure(api_key="AIzaSyAhaac6yPECRFwRmpifQattFvK__8YCyaY")
+model = genai.GenerativeModel(model_name='gemini-2.0-flash')
+
 class ProductRequest(BaseModel):
-    product_name: str
+    product_name: str  # This will be treated as part_number
 
 def read_csv_from_s3(bucket, key):
     """Read CSV from S3 into a pandas DataFrame."""
     try:
         obj = s3.get_object(Bucket=bucket, Key=key)
-        return pd.read_csv(StringIO(obj['Body'].read().decode('utf-8')))
+        df = pd.read_csv(StringIO(obj['Body'].read().decode('utf-8')))
+        # Replace NaN-like values with None for JSON compatibility
+        return df.replace([np.nan, pd.NA], None)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error reading CSV from S3: {str(e)}")
 
@@ -38,51 +47,66 @@ def write_csv_to_s3(df, bucket, key):
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error writing CSV to S3: {str(e)}")
 
-def load_distributor_domains():
-    """Extract root domains and names from distributor-list.csv in S3."""
+def get_domains_from_urls(urls):
+    """Get main domains from URLs using Google Generative AI."""
     try:
-        df = read_csv_from_s3(BUCKET_NAME, "Distributor List/distributor-list.csv")
-        if "website" not in df.columns or "name" not in df.columns:
-            raise HTTPException(status_code=500, detail="'website' or 'name' column not found in distributor-list.csv")
+        # If no valid URLs, return empty list without calling AI
+        if not urls or all(url is None for url in urls):
+            return []
         
-        distributor_info = {}
-        for _, row in df.dropna(subset=["website"]).iterrows():
-            website = row["website"].strip().lower()
-            if not website.startswith(('http://', 'https://')):
-                domain = website.replace("www.", "")
-            else:
-                parsed_url = urlparse(website)
-                domain = parsed_url.netloc.replace("www.", "") if parsed_url.netloc else parsed_url.path.replace("www.", "")
-            if domain:
-                distributor_info[domain] = row["name"]
-                
-        return distributor_info
+        urls_str = ", ".join([str(url) for url in urls if url])
+        prompt = (
+            f"""Get me the main domains(without https or http or www or in or com and so on) from the below urls in list object:
+            {urls_str}.
+            Don't print any other information except the list of urls in json format: {{"Domains":[]}}
+            """
+        )
+        
+        response = model.generate_content(prompt)
+        response_text = response.text.strip('```json').strip().strip('```').strip()
+        
+        # Try parsing the response, fallback to empty list if invalid
+        try:
+            domains_data = json.loads(response_text)
+            return domains_data.get("Domains", [])
+        except json.JSONDecodeError:
+            return []  # Fallback if AI response isn't valid JSON
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Error loading distributor CSV: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Error getting domains from AI: {str(e)}")
 
 @router.post("")
 async def map_distributor(request: ProductRequest):
     """
-    Map distributor URLs and names for a specific product name from Demo Distributor URLs.csv 
-    and distributor-list.csv to Product_sheet.csv and update the S3 file.
+    Map distributor URLs and domains for a specific part_number from Product_sheet.csv.
+    Uses part_number to find corresponding web_part_number, then maps to Demo Distributor URLs.csv.
+    Updates Product_sheet.csv in S3 with URLs and domains.
     """
     try:
-        # Read all CSVs
+        # Read all CSVs from S3
         distributor_df = read_csv_from_s3(BUCKET_NAME, "Distributor URL/Demo Distributor URLs.csv")
         product_df = read_csv_from_s3(BUCKET_NAME, "Product Sheet/Product_sheet.csv")
-        distributor_domains = load_distributor_domains()
         
         # Validate required columns
         if 'Product Name' not in distributor_df.columns:
             raise HTTPException(status_code=500, detail="Missing 'Product Name' in Demo Distributor URLs.csv")
         if 'web_part_number' not in product_df.columns:
             raise HTTPException(status_code=500, detail="Missing 'web_part_number' in Product_sheet.csv")
+        if 'part_number' not in product_df.columns:
+            raise HTTPException(status_code=500, detail="Missing 'part_number' in Product_sheet.csv")
 
-        # Filter distributor_df for the requested product_name
-        distributor_match = distributor_df[distributor_df['Product Name'] == request.product_name]
+        # Find the web_part_number corresponding to the provided part_number
+        product_match = product_df[product_df['part_number'] == request.product_name]
+        
+        if product_match.empty:
+            raise HTTPException(status_code=404, detail=f"No product found for part_number: {request.product_name}")
+        
+        web_part_number = product_match['web_part_number'].iloc[0]  # Get the corresponding web_part_number
+
+        # Filter distributor_df using the web_part_number (assumed to match Product Name)
+        distributor_match = distributor_df[distributor_df['Product Name'] == web_part_number]
         
         if distributor_match.empty:
-            raise HTTPException(status_code=404, detail=f"No distributor URLs found for product: {request.product_name}")
+            raise HTTPException(status_code=404, detail=f"No distributor URLs found for web_part_number: {web_part_number}")
 
         # Get the distributor URLs
         distributor_urls = {
@@ -91,49 +115,47 @@ async def map_distributor(request: ProductRequest):
             'Distributor URL 3': distributor_match['Distributor URL 3'].iloc[0] if 'Distributor URL 3' in distributor_match.columns else None
         }
 
-        # Find matching distributor names
-        distributor_names = set()
-        for url in distributor_urls.values():
-            if url:
-                parsed_url = urlparse(url.strip().lower())
-                domain = parsed_url.netloc.replace("www.", "") if parsed_url.netloc else parsed_url.path.replace("www.", "")
-                if domain in distributor_domains:
-                    distributor_names.add(distributor_domains[domain])
+        # Get domains using Google Generative AI
+        url_list = [url for url in distributor_urls.values() if url]
+        domains = get_domains_from_urls(url_list) if url_list else []
 
-        # Update product_df
-        product_idx = product_df[product_df['web_part_number'] == request.product_name].index
+        # Find the product in product_df using the original part_number
+        product_idx = product_df[product_df['part_number'] == request.product_name].index
         
         if product_idx.empty:
             raise HTTPException(status_code=404, detail=f"Product {request.product_name} not found in Product_sheet.csv")
 
-        # Update distributor URLs
-        for dist_col in ['Distributor URL 1', 'Distributor URL 2', 'Distributor URL 3']:
-            if dist_col in product_df.columns and distributor_urls.get(dist_col):
-                product_df.loc[product_idx, dist_col] = distributor_urls[dist_col]
-
-        # Update Distributor Names column
-        if 'Distributor Names' not in product_df.columns:
-            if 'Distributor URL 1' in product_df.columns:
-                url1_position = product_df.columns.get_loc('Distributor URL 1')
-                product_df.insert(url1_position, 'Distributor Names', None)
-            else:
-                product_df['Distributor Names'] = None
+        # Add columns to product_df if they don’t exist
+        if 'Domain Names' not in product_df.columns:
+            if 'web_part_number' in product_df.columns:
+                position = product_df.columns.get_loc('web_part_number') + 1
+                product_df.insert(position, 'Domain Names', None)
         
-        product_df.loc[product_idx, 'Distributor Names'] = ', '.join(distributor_names) if distributor_names else None
+        # Update Distributor URLs and Domain Names
+        for dist_col in ['Distributor URL 1', 'Distributor URL 2', 'Distributor URL 3']:
+            if dist_col not in product_df.columns:
+                product_df[dist_col] = None
+            if distributor_urls.get(dist_col):
+                product_df.loc[product_idx, dist_col] = distributor_urls[dist_col]
+        
+        product_df.loc[product_idx, 'Domain Names'] = ', '.join(domains) if domains else None
+        # Note: Not updating 'Distributor Names' since we’re using domains from AI instead of distributor-list.csv
 
-        # Write back to S3
+        # Write updated DataFrame back to S3
         write_csv_to_s3(product_df, BUCKET_NAME, "Product Sheet/Product_sheet.csv")
         
-        num_distributors = len(distributor_names)
-        
-        # Adjust message based on number of distributors
-        distributor_label = "distributor" if num_distributors == 1 else "distributors"
-        message = f"Successfully updated {num_distributors} {distributor_label} in Product_sheet.csv for {request.product_name}"
-        
+        num_domains = len(domains)
+        distributor_label = "distributor" if num_domains == 1 else "distributors"
+        message = f"Successfully updated {num_domains} {distributor_label} in Product_sheet.csv for part_number {request.product_name} (web_part_number: {web_part_number})"
+
+        # Convert the updated row to dict and ensure NaN is handled
+        updated_row_dict = product_df.loc[product_idx].iloc[0].replace([np.nan, pd.NA], None).to_dict()
+
         return {
             "message": message,
             "distributor_urls": {k: v for k, v in distributor_urls.items() if v is not None},
-            "distributor_names": list(distributor_names)
+            "domain_names": domains,
+            "updated_product_row": updated_row_dict
         }
     except HTTPException as e:
         raise e
