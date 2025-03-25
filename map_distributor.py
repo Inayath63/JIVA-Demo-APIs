@@ -37,26 +37,45 @@ def write_csv_to_s3(df, bucket, key):
 @router.post("")
 async def map_distributor():
     """
-    Map distributor URLs from Demo Distributor URLs.csv to Product_sheet.csv
-    and update the S3 file.
+    Map distributor URLs from Demo Distributor URLs.csv to Product_sheet_test.csv
+    based on Product Name and web_part_number, and update the S3 file.
     """
     try:
+        # Read both CSVs
         distributor_df = read_csv_from_s3(BUCKET_NAME, "Distributor URL/Demo Distributor URLs.csv")
         product_df = read_csv_from_s3(BUCKET_NAME, "Product Sheet/Product_sheet.csv")
         
-        dist_urls = {
-            'Distributor 1': distributor_df['Distributor URL 1'].iloc[0] if 'Distributor URL 1' in distributor_df.columns else None,
-            'Distributor 2': distributor_df['Distributor URL 2'].iloc[0] if 'Distributor URL 2' in distributor_df.columns else None,
-            'Distributor 3': distributor_df['Distributor URL 3'].iloc[0] if 'Distributor URL 3' in distributor_df.columns else None
-        }
+        # Ensure common columns exist
+        if 'Product Name' not in distributor_df.columns:
+            raise HTTPException(status_code=500, detail="Missing 'Product Name' in Demo Distributor URLs.csv")
+        if 'web_part_number' not in product_df.columns:
+            raise HTTPException(status_code=500, detail="Missing 'web_part_number' in Product_sheet.csv")
+
+        # Rename 'Product Name' to 'web_part_number' in distributor_df for merging
+        distributor_df = distributor_df.rename(columns={'Product Name': 'web_part_number'})
         
-        for dist_name, url in dist_urls.items():
-            if url and dist_name + ' URL' in product_df.columns:
-                product_df[dist_name + ' URL'] = url
+        # Merge DataFrames on 'web_part_number'
+        merged_df = product_df.merge(
+            distributor_df[['web_part_number', 'Distributor URL 1', 'Distributor URL 2', 'Distributor URL 3']],
+            on='web_part_number',
+            how='left',
+            suffixes=('', '_new')
+        )
+
+        # Update distributor URL columns if they exist in product_df
+        for dist_col in ['Distributor URL 1', 'Distributor URL 2', 'Distributor URL 3']:
+            if dist_col in product_df.columns:
+                merged_df[dist_col] = merged_df[dist_col + '_new'].where(merged_df[dist_col + '_new'].notna(), merged_df[dist_col])
+            else:
+                merged_df[dist_col] = merged_df[dist_col + '_new']
+
+        # Drop temporary '_new' columns
+        merged_df = merged_df.drop(columns=[col for col in merged_df.columns if col.endswith('_new')])
+
+        # Write back to S3 (using Product_sheet_test.csv as in your working version)
+        write_csv_to_s3(merged_df, BUCKET_NAME, "Product Sheet/Product_sheet_test.csv")
         
-        write_csv_to_s3(product_df, BUCKET_NAME, "Product Sheet/Product_sheet.csv")
-        
-        return {"message": "Successfully updated Product_sheet.csv with distributor URLs"}
+        return {"message": "Successfully updated Product_sheet_test.csv with distributor URLs"}
     except HTTPException as e:
         raise e
     except Exception as e:
