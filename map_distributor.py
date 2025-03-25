@@ -45,9 +45,9 @@ async def map_distributor():
         product_df = read_csv_from_s3(BUCKET_NAME, "Product Sheet/Product_sheet.csv")
         
         dist_urls = {
-            'Distributor 1': distributor_df['Distributor 1 URL'].iloc[0] if 'Distributor 1 URL' in distributor_df.columns else None,
-            'Distributor 2': distributor_df['Distributor 2 URL'].iloc[0] if 'Distributor 2 URL' in distributor_df.columns else None,
-            'Distributor 3': distributor_df['Distributor 3 URL'].iloc[0] if 'Distributor 3 URL' in distributor_df.columns else None
+            'Distributor 1': distributor_df['Distributor URL 1'].iloc[0] if 'Distributor 1 URL' in distributor_df.columns else None,
+            'Distributor 2': distributor_df['Distributor URL 2'].iloc[0] if 'Distributor 2 URL' in distributor_df.columns else None,
+            'Distributor 3': distributor_df['Distributor URL 3'].iloc[0] if 'Distributor 3 URL' in distributor_df.columns else None
         }
         
         for dist_name, url in dist_urls.items():
