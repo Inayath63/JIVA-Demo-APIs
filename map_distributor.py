@@ -52,7 +52,7 @@ def write_csv_to_s3(df, bucket, key):
         raise HTTPException(status_code=500, detail=f"Error writing CSV to S3: {str(e)}")
 
 def get_domains_from_urls(urls):
-    """Get main domains from URLs using Google Generative AI."""
+    """Get main domains from URLs using Google Generative AI and capitalize the first letter."""
     try:
         logger.info(f"URLs passed to get_domains_from_urls: {urls}")
         # If no valid URLs, return empty list without calling AI
@@ -75,7 +75,10 @@ def get_domains_from_urls(urls):
         
         try:
             domains_data = json.loads(response_text)
-            return domains_data.get("Domains", [])
+            domains = domains_data.get("Domains", [])
+            # Capitalize the first letter of each domain
+            capitalized_domains = [domain.capitalize() for domain in domains]
+            return capitalized_domains
         except json.JSONDecodeError:
             logger.warning(f"Invalid JSON response from AI: {response_text}, returning empty list")
             return []
