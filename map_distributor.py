@@ -7,6 +7,11 @@ from urllib.parse import urlparse
 import google.generativeai as genai
 import json
 import numpy as np
+import logging
+
+# Set up logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/map-distributor", tags=["map-distributor"])
 
@@ -32,7 +37,6 @@ def read_csv_from_s3(bucket, key):
     try:
         obj = s3.get_object(Bucket=bucket, Key=key)
         df = pd.read_csv(StringIO(obj['Body'].read().decode('utf-8')))
-        # Replace NaN-like values with None for JSON compatibility
         return df.replace([np.nan, pd.NA], None)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error reading CSV from S3: {str(e)}")
@@ -50,13 +54,16 @@ def write_csv_to_s3(df, bucket, key):
 def get_domains_from_urls(urls):
     """Get main domains from URLs using Google Generative AI."""
     try:
+        logger.info(f"URLs passed to get_domains_from_urls: {urls}")
         # If no valid URLs, return empty list without calling AI
         if not urls or all(url is None for url in urls):
+            logger.info("No valid URLs provided, returning empty list")
             return []
         
         urls_str = ", ".join([str(url) for url in urls if url])
+        logger.info(f"Prompting AI with URLs: {urls_str}")
         prompt = (
-            f"""Get me the main domains(without https or http or www or in or com and so on) from the below urls in list object:
+            f"""Get me the main domains from the below urls in list object:
             {urls_str}.
             Don't print any other information except the list of urls in json format: {{"Domains":[]}}
             """
@@ -64,13 +71,14 @@ def get_domains_from_urls(urls):
         
         response = model.generate_content(prompt)
         response_text = response.text.strip('```json').strip().strip('```').strip()
+        logger.info(f"AI response: {response_text}")
         
-        # Try parsing the response, fallback to empty list if invalid
         try:
             domains_data = json.loads(response_text)
             return domains_data.get("Domains", [])
         except json.JSONDecodeError:
-            return []  # Fallback if AI response isn't valid JSON
+            logger.warning(f"Invalid JSON response from AI: {response_text}, returning empty list")
+            return []
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Error getting domains from AI: {str(e)}")
 
@@ -79,7 +87,7 @@ async def map_distributor(request: ProductRequest):
     """
     Map distributor URLs and domains for a specific part_number from Product_sheet.csv.
     Uses part_number to find corresponding web_part_number, then maps to Demo Distributor URLs.csv.
-    Updates Product_sheet.csv in S3 with URLs and domains.
+    Updates Product_sheet.csv in S3 with URLs and distributor names.
     """
     try:
         # Read all CSVs from S3
@@ -100,9 +108,10 @@ async def map_distributor(request: ProductRequest):
         if product_match.empty:
             raise HTTPException(status_code=404, detail=f"No product found for part_number: {request.product_name}")
         
-        web_part_number = product_match['web_part_number'].iloc[0]  # Get the corresponding web_part_number
+        web_part_number = product_match['web_part_number'].iloc[0]
+        logger.info(f"Resolved web_part_number: {web_part_number}")
 
-        # Filter distributor_df using the web_part_number (assumed to match Product Name)
+        # Filter distributor_df using the web_part_number
         distributor_match = distributor_df[distributor_df['Product Name'] == web_part_number]
         
         if distributor_match.empty:
@@ -114,10 +123,11 @@ async def map_distributor(request: ProductRequest):
             'Distributor URL 2': distributor_match['Distributor URL 2'].iloc[0] if 'Distributor URL 2' in distributor_match.columns else None,
             'Distributor URL 3': distributor_match['Distributor URL 3'].iloc[0] if 'Distributor URL 3' in distributor_match.columns else None
         }
+        logger.info(f"Distributor URLs: {distributor_urls}")
 
         # Get domains using Google Generative AI
         url_list = [url for url in distributor_urls.values() if url]
-        domains = get_domains_from_urls(url_list) if url_list else []
+        domains = get_domains_from_urls(url_list)
 
         # Find the product in product_df using the original part_number
         product_idx = product_df[product_df['part_number'] == request.product_name].index
@@ -126,20 +136,19 @@ async def map_distributor(request: ProductRequest):
             raise HTTPException(status_code=404, detail=f"Product {request.product_name} not found in Product_sheet.csv")
 
         # Add columns to product_df if they don’t exist
-        if 'Domain Names' not in product_df.columns:
+        if 'Distributor Names' not in product_df.columns:
             if 'web_part_number' in product_df.columns:
                 position = product_df.columns.get_loc('web_part_number') + 1
-                product_df.insert(position, 'Domain Names', None)
+                product_df.insert(position, 'Distributor Names', None)
         
-        # Update Distributor URLs and Domain Names
+        # Update Distributor URLs and Distributor Names
         for dist_col in ['Distributor URL 1', 'Distributor URL 2', 'Distributor URL 3']:
             if dist_col not in product_df.columns:
                 product_df[dist_col] = None
             if distributor_urls.get(dist_col):
                 product_df.loc[product_idx, dist_col] = distributor_urls[dist_col]
         
-        product_df.loc[product_idx, 'Domain Names'] = ', '.join(domains) if domains else None
-        # Note: Not updating 'Distributor Names' since we’re using domains from AI instead of distributor-list.csv
+        product_df.loc[product_idx, 'Distributor Names'] = ', '.join(domains) if domains else None
 
         # Write updated DataFrame back to S3
         write_csv_to_s3(product_df, BUCKET_NAME, "Product Sheet/Product_sheet.csv")
