@@ -1,4 +1,3 @@
-# process_product_specs.py
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 import requests
@@ -31,6 +30,10 @@ s3_client = boto3.client(
 
 class ProductInput(BaseModel):
     product_name: str
+
+class ProductResponse(BaseModel):
+    response: bool
+    message: str
 
 def fetch_webpage(url):
     try:
@@ -112,7 +115,7 @@ def read_csv_from_s3(bucket_name, s3_key):
     except ClientError:
         return None
 
-@router.post("", response_model=Dict[str, bool])
+@router.post("", response_model=ProductResponse)
 async def process_product(product_input: ProductInput):
     s3_csv_key = "Distributor URL/Demo Distributor URLs.csv"
     product_name = product_input.product_name.strip()
@@ -137,4 +140,7 @@ async def process_product(product_input: ProductInput):
             if not scrape_product_specs(url, product_name, output_filename):
                 raise HTTPException(status_code=500, detail=f"Failed to process URL {url}")
 
-    return {"response": True}
+    return {
+        "response": True,
+        "message": f"Specifications for the product {product_name} are retrieved and saved to S3 bucket"
+    }
