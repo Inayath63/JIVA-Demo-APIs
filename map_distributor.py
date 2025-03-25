@@ -48,7 +48,6 @@ def load_distributor_domains():
         distributor_info = {}
         for _, row in df.dropna(subset=["website"]).iterrows():
             website = row["website"].strip().lower()
-            # If it's not a full URL, assume it's a domain
             if not website.startswith(('http://', 'https://')):
                 domain = website.replace("www.", "")
             else:
@@ -127,8 +126,12 @@ async def map_distributor(request: ProductRequest):
         
         num_distributors = len(distributor_names)
         
+        # Adjust message based on number of distributors
+        distributor_label = "distributor" if num_distributors == 1 else "distributors"
+        message = f"Successfully updated {num_distributors} {distributor_label} in Product_sheet.csv for {request.product_name}"
+        
         return {
-            "message": f"Successfully updated {num_distributors} distributors in Product_sheet.csv for {request.product_name}",
+            "message": message,
             "distributor_urls": {k: v for k, v in distributor_urls.items() if v is not None},
             "distributor_names": list(distributor_names)
         }
