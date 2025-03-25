@@ -63,7 +63,7 @@ def get_domains_from_urls(urls):
         urls_str = ", ".join([str(url) for url in urls if url])
         logger.info(f"Prompting AI with URLs: {urls_str}")
         prompt = (
-            f"""Get me the main domains from the below urls in list object:
+            f"""Get me the main domains(without https or http or www or in or com and so on) from the below urls in list object:
             {urls_str}.
             Don't print any other information except the list of urls in json format: {{"Domains":[]}}
             """
