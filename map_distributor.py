@@ -37,7 +37,7 @@ def write_csv_to_s3(df, bucket, key):
 @router.post("")
 async def map_distributor():
     """
-    Map distributor URLs from Demo Distributor URLs.csv to Product_sheet_test.csv
+    Map distributor URLs from Demo Distributor URLs.csv to Product_sheet.csv
     based on Product Name and web_part_number, and update the S3 file.
     """
     try:
